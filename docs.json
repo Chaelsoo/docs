@@ -112,6 +112,11 @@
             "pages": ["pivoting/index", "pivoting/ligolo", "pivoting/chisel", "pivoting/proxychains"]
           },
           {
+            "group": "Reverse Shells",
+            "icon": "plug",
+            "pages": ["shells"]
+          },
+          {
             "group": "File Transfers",
             "icon": "money-bill-transfer",
             "pages": ["file-transfers"]

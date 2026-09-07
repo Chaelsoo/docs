@@ -56,6 +56,30 @@ nxc smb $IP -u $USER -p $PASSWORD -d $DOMAIN    # specify domain explicitly
 nxc smb $IP -u $USER -p $PASSWORD --kdcHost $DC_HOST  # specify KDC for Kerberos
 ```
 
+### Kerberos Authentication
+
+When the DC has NTLM disabled (`NTLM:False` in the host banner), authenticate with `-k`. nxc can also write a working `krb5.conf` for the target domain so the rest of your tooling (impacket, bloodyAD, certipy) resolves the realm.
+
+```bash wrap
+# Force Kerberos auth (required when NTLM is disabled)
+nxc smb $DC_HOST -u $USER -p $PASSWORD -k
+
+# Generate a krb5.conf for the domain, then point the system at it
+nxc smb $DC_IP -u $USER -p $PASSWORD -k --generate-krb5-file krb5.conf
+export KRB5_CONFIG=krb5.conf
+
+# Reuse a ticket from the cache instead of a password (FQDN target, not IP)
+export KRB5CCNAME=$USER.ccache
+nxc smb $DC_HOST -u $USER --use-kcache -k
+
+# Point at the KDC explicitly when the DC hostname doesn't resolve
+nxc smb $DC_HOST -u $USER -p $PASSWORD -k --kdcHost $DC_HOST
+```
+
+<Tip>
+`--generate-krb5-file` works with any auth method (`-p`, `-H`, `--use-kcache`). Use it as the fast path to the hand-written `krb5.conf` in [NTLM Disabled](/active-directory/ntlm-disabled).
+</Tip>
+
 ### Share Enumeration
 
 List all shares and their access level: look for non-default shares like `backup`, `data`, `scripts`, `IT`.

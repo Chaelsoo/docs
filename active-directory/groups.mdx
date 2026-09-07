@@ -21,6 +21,42 @@ nxc ldap $DC_IP -u $USER -p $PASSWORD -d $DOMAIN --dns-server $DC_IP -M groupmem
 nxc smb $IP -u $USER -p $PASSWORD --groups
 ```
 
+## Group Membership Is Baked Into the Ticket
+
+The PAC (which carries your group SIDs) is written into the TGT **at issuance time**. It reflects membership at the moment you authenticated, not the current state of AD. Add yourself to a group and nothing changes until you get a **new TGT**.
+
+```
+Mon 09:00  User requests TGT        PAC: [Domain Users, HR]
+Mon 10:00  Admin adds user to Domain Admins
+Mon 11:00  User hits a service      PAC still: [Domain Users, HR]  ← no DA access
+```
+
+After any group change (yours or a target's), force a fresh ticket:
+
+```bash wrap
+# Windows — purge cached tickets, then re-authenticate (or log off / on)
+klist purge
+# new logon / runas → new TGT with updated PAC
+
+# Linux — destroy and re-request
+kdestroy
+kinit $USER@$DOMAIN
+# or with impacket
+getTGT.py $DOMAIN/$USER:$PASSWORD -dc-ip $DC_IP
+```
+
+<Warning>
+If you can't re-authenticate, you wait. Default TGT lifetime is **10 hours**, so group changes can take up to 10h to apply on their own.
+</Warning>
+
+| Ticket | Default lifetime |
+|--|--|
+| TGT | 10 hours |
+| Service ticket (TGS) | 10 hours max, renewed from the TGT |
+| TGT renewal window | 7 days |
+
+Nested groups resolve the same way: adding a group to another group only helps once every affected user re-authenticates.
+
 ## Domain Admins
 
 The highest privilege group in the domain. Members have full control over all domain resources, can log into any machine, perform DCSync, and modify any object.
@@ -132,8 +168,10 @@ Offensive value: lateral movement when WinRM and SMB are blocked but RDP (3389) 
 nxc rdp $IP -u $USER -p $PASSWORD
 
 # Connect
-xfreerdp /u:$USER /p:$PASSWORD /v:$IP
+xfreerdp3 /d:$DOMAIN /u:$USER /p:$PASSWORD /v:$IP /cert:ignore /dynamic-resolution +clipboard
 ```
+
+See [Docker → Windows Containers](/linux/docker#windows-containers) for the full xfreerdp flag reference (PTH, drive mounting, tunneling).
 
 ## Remote Management Users
 

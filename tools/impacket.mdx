@@ -692,6 +692,32 @@ export KRB5CCNAME=Administrator.ccache
 smbclient.py -k -no-pass $DOMAIN/Administrator@$TARGET.$DOMAIN
 ```
 
+### PAC Validation — Why Silver Tickets Sometimes Fail
+
+A service ticket's PAC carries two signatures: a **server signature** (the service account's key) and a **KDC signature** (the `krbtgt` key). When you forge a Silver Ticket you hold the service hash, so the server signature is valid, but you cannot produce a valid KDC signature.
+
+Whether that matters depends on whether the target service performs **PAC validation**: calling back to a DC over Netlogon (`KERB_VERIFY_PAC`) to check the KDC signature.
+
+- Services running as **`NT AUTHORITY\SYSTEM`** or holding **`SeTcbPrivilege`** ("Act as part of the OS") are treated as trusted and **skip** PAC validation. Most core Windows services land here — this is why Silver Tickets work so often.
+- Services running under a **plain domain account without `SeTcbPrivilege`** validate the PAC, and the forged ticket is rejected.
+- **S4U2self / protocol transition** always triggers KDC-signature checks, so a Silver Ticket cannot be used to pivot through constrained delegation.
+
+| Service (SPN) | Typically runs as | PAC validation | Silver Ticket |
+|--|--|--|--|
+| `CIFS` — SMB shares | SYSTEM | No | Reliable |
+| `HOST` — schtasks, service control | SYSTEM | No | Reliable |
+| `HOST` + `RPCSS` — WMI | SYSTEM / NetworkService | No | Reliable |
+| `MSSQLSvc` — MSSQL | domain SA or `NT Service\MSSQLSERVER` | No (SQL doesn't verify) | Reliable |
+| `HTTP` — WinRM / PS Remoting | NetworkService / SYSTEM | Usually no | Usually works |
+| `HTTP` — IIS / ASP.NET app | app-pool domain identity | Yes, if the pool account lacks `SeTcbPrivilege` | Often fails |
+| `LDAP` — against a DC | DC-side | Yes | Fails on patched DCs — use a Golden Ticket / DCSync with the DC machine hash |
+| Any service under a plain domain user | domain user | Yes | Fails |
+| Custom / third-party services | varies | Rarely implemented | Usually works |
+
+<Note>
+Impacket ≥ 0.11 `ticketer.py` embeds `PAC_ATTRIBUTES` and a `PAC_REQUESTOR` buffer so the forged PAC survives the structural checks from the Nov 2021 updates (CVE-2021-42287). It still cannot forge the KDC signature, so any service that actually calls back to a DC stays out of reach.
+</Note>
+
 ### ExtraSids (Child to Parent Domain)
 
 ```bash wrap
